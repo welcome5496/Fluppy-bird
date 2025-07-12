@@ -1,139 +1,146 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Flappy Bird Game</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GPS Tracker with Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     body {
       margin: 0;
-      overflow: hidden;
-      background: skyblue;
+      font-family: monospace;
+      background: #000;
+      color: #0f0;
+      text-align: center;
     }
-
-    canvas {
-      display: block;
-      margin: auto;
-      background: #70c5ce;
+    #map {
+      height: 50vh;
+      width: 100%;
+    }
+    .stats {
+      padding: 20px;
+    }
+    .stats p {
+      font-size: 1.2rem;
+      margin: 10px 0;
+    }
+    h1 {
+      padding: 20px 0 10px;
+    }
+    .mode-btn {
+      background: #0f0;
+      color: #000;
+      border: none;
+      padding: 10px 20px;
+      font-size: 1rem;
+      margin-bottom: 15px;
+      border-radius: 5px;
+      cursor: pointer;
     }
   </style>
 </head>
 <body>
-  <canvas id="gameCanvas" width="400" height="600"></canvas>
+  <h1>🚶 GPS Tracker + Map</h1>
+
+  <button id="modeToggle" class="mode-btn">Mode: Walking</button>
+
+  <div id="map"></div>
+  <div class="stats">
+    <p id="speed">Speed: 0 m/s</p>
+    <p id="distance">Distance: 0 m</p>
+    <p id="average">Average: 0 m/s</p>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const canvas = document.getElementById("gameCanvas");
-    const ctx = canvas.getContext("2d");
+    let previous = null;
+    let totalDistance = 0;
+    let startTime = Date.now();
+    let map, marker, path;
+    let mode = 'walking'; // or 'running'
 
-    const birdImg = new Image();
-    birdImg.src = "bird.png";
-
-    const flapSound = new Audio("flap.mp3");
-    const hitSound = new Audio("hit.mp3");
-
-    let bird = {
-      x: 80,
-      y: 150,
-      width: 40,
-      height: 40,
-      gravity: 0.6,
-      lift: -10,
-      velocity: 0,
+    const filters = {
+      walking: { min: 3, max: 50 },
+      running: { min: 2, max: 100 }
     };
 
-    let pipes = [];
-    let pipeWidth = 50;
-    let gap = 120;
-    let frame = 0;
-    let score = 0;
-    let gameOver = false;
+    document.getElementById("modeToggle").onclick = () => {
+      mode = (mode === 'walking') ? 'running' : 'walking';
+      document.getElementById("modeToggle").textContent = `Mode: ${mode.charAt(0).toUpperCase() + mode.slice(1)}`;
+    };
 
-    function drawBird() {
-      ctx.drawImage(birdImg, bird.x, bird.y, bird.width, bird.height);
+    function deg2rad(deg) {
+      return deg * Math.PI / 180;
     }
 
-    function drawPipes() {
-      ctx.fillStyle = "green";
-      pipes.forEach(pipe => {
-        ctx.fillRect(pipe.x, 0, pipeWidth, pipe.top);
-        ctx.fillRect(pipe.x, pipe.top + gap, pipeWidth, canvas.height);
-      });
+    function getDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const dLat = deg2rad(lat2 - lat1);
+      const dLon = deg2rad(lon2 - lon1);
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(deg2rad(lat1)) *
+        Math.cos(deg2rad(lat2)) *
+        Math.sin(dLon / 2) ** 2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
     }
 
-    function drawScore() {
-      ctx.fillStyle = "white";
-      ctx.font = "24px Arial";
-      ctx.fillText("Score: " + score, 10, 30);
+    function initMap(lat, lon) {
+      map = L.map('map').setView([lat, lon], 17);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+      }).addTo(map);
+      marker = L.marker([lat, lon]).addTo(map);
+      path = L.polyline([[lat, lon]], { color: 'lime' }).addTo(map);
     }
 
-    function update() {
-      bird.velocity += bird.gravity;
-      bird.y += bird.velocity;
+    if ("geolocation" in navigator) {
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          const coords = pos.coords;
+          const speed = coords.speed !== null ? coords.speed : 0;
+          const lat = coords.latitude;
+          const lon = coords.longitude;
 
-      if (frame % 90 === 0) {
-        let top = Math.random() * 200 + 50;
-        pipes.push({ x: canvas.width, top: top });
-      }
+          document.getElementById("speed").textContent = `Speed: ${speed.toFixed(1)} m/s`;
 
-      pipes.forEach(pipe => pipe.x -= 2);
+          if (!map) {
+            initMap(lat, lon);
+          } else {
+            marker.setLatLng([lat, lon]);
+            map.panTo([lat, lon]);
+            path.addLatLng([lat, lon]);
+          }
 
-      pipes = pipes.filter(pipe => {
-        if (pipe.x + pipeWidth < bird.x && !pipe.passed) {
-          score++;
-          pipe.passed = true;
+          if (previous) {
+            const d = getDistance(previous.latitude, previous.longitude, lat, lon);
+            const { min, max } = filters[mode];
+
+            if (d > min && d < max) {
+              totalDistance += d;
+              document.getElementById("distance").textContent = `Distance: ${Math.round(totalDistance)} m`;
+
+              const timeElapsed = (Date.now() - startTime) / 1000;
+              const avgSpeed = totalDistance / timeElapsed;
+              document.getElementById("average").textContent = `Average: ${avgSpeed.toFixed(1)} m/s`;
+            }
+          }
+
+          previous = coords;
+        },
+        (err) => {
+          alert("Location error: " + err.message);
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 10000
         }
-        return pipe.x + pipeWidth > 0;
-      });
-
-      for (let pipe of pipes) {
-        const hitPipe = (
-          bird.x < pipe.x + pipeWidth &&
-          bird.x + bird.width > pipe.x &&
-          (bird.y < pipe.top || bird.y + bird.height > pipe.top + gap)
-        );
-        if (hitPipe) {
-          hitSound.play();
-          gameOver = true;
-        }
-      }
-
-      if (bird.y + bird.height > canvas.height || bird.y < 0) {
-        hitSound.play();
-        gameOver = true;
-      }
-
-      frame++;
+      );
+    } else {
+      alert("Geolocation not supported.");
     }
-
-    function gameLoop() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!gameOver) {
-        update();
-        drawPipes();
-        drawBird();
-        drawScore();
-        requestAnimationFrame(gameLoop);
-      } else {
-        ctx.fillStyle = "red";
-        ctx.font = "36px Arial";
-        ctx.fillText("Game Over", 100, canvas.height / 2);
-        ctx.font = "20px Arial";
-        ctx.fillText("Tap or press any key to restart", 60, canvas.height / 2 + 40);
-      }
-    }
-
-    function flap() {
-      if (!gameOver) {
-        bird.velocity = bird.lift;
-        flapSound.play();
-      } else {
-        location.reload();
-      }
-    }
-
-    document.addEventListener("keydown", flap);
-    document.addEventListener("touchstart", flap);
-
-    gameLoop();
   </script>
 </body>
 </html>
